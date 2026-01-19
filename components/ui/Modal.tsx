@@ -7,9 +7,11 @@ interface ModalProps {
   onClose: () => void;
   children: ReactNode;
   className?: string;
+  size?: "default" | "large";
 }
 
-export function Modal({ isOpen, onClose, children, className = "" }: ModalProps) {
+export function Modal({ isOpen, onClose, children, className = "", size = "default" }: ModalProps) {
+  const sizeClass = size === "large" ? "modal-large" : "";
   const handleEscape = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -33,7 +35,7 @@ export function Modal({ isOpen, onClose, children, className = "" }: ModalProps)
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
-        className={`modal ${className}`}
+        className={`modal ${sizeClass} ${className}`.trim()}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

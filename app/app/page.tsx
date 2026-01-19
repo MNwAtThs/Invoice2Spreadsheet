@@ -13,41 +13,23 @@ import {
   ResultsModal,
   SettingsModal,
 } from "@/components";
-import type { DocumentRow, ExtractedDocument, ParseResponse } from "@/types";
+import type { ExtractedDocument, DocumentMetadata, LineItem, ParseResponse } from "@/types";
 
-const EMPTY_ROW: DocumentRow = {
-  filename: "",
-  vendor: "",
-  invoiceNumber: "",
-  poNumber: "",
-  date: "",
-  dueDate: "",
-  total: "",
-  currency: "",
-  billTo: "",
+const EMPTY_LINE_ITEM: LineItem = {
+  lineNumber: "",
+  quantity: "",
+  unit: "",
+  description: "",
+  unitPrice: "",
+  amount: "",
   notes: "",
 };
-
-function normalizeRow(doc: ExtractedDocument): DocumentRow {
-  return {
-    filename: doc.filename || "",
-    vendor: doc.vendor || "",
-    invoiceNumber: doc.invoiceNumber || "",
-    poNumber: doc.poNumber || "",
-    date: doc.date || "",
-    dueDate: doc.dueDate || "",
-    total: doc.total || "",
-    currency: doc.currency || "",
-    billTo: doc.billTo || "",
-    notes: doc.error ? `Error: ${doc.error}` : doc.rawTextPreview || "",
-  };
-}
 
 export default function AppPage() {
   const { accessToken, userProfile, isAuthenticated, signOut, refreshProfile } = useAuth();
   const history = useHistory(accessToken);
 
-  const [dataRows, setDataRows] = useState<DocumentRow[]>([]);
+  const [documents, setDocuments] = useState<ExtractedDocument[]>([]);
   const [statusMessage, setStatusMessage] = useState("");
   const [statusType, setStatusType] = useState<"info" | "success" | "warning" | "error">("info");
   const [isXlsxReady, setIsXlsxReady] = useState(false);
@@ -80,7 +62,7 @@ export default function AppPage() {
     const formData = new FormData();
     pdfs.forEach((file) => formData.append("files", file));
 
-    setStatus("Extracting invoice data...", "info");
+    setStatus("Extracting data with AI...", "info");
 
     const response = await fetch("/api/parse", {
       method: "POST",
@@ -100,9 +82,17 @@ export default function AppPage() {
       return;
     }
 
-    setDataRows(payload.documents.map(normalizeRow));
+    setDocuments(payload.documents as ExtractedDocument[]);
     setIsResultsOpen(true);
-    setStatus(`Loaded ${payload.documents.length} document(s).`, "success");
+
+    const totalItems = payload.documents.reduce(
+      (sum, doc) => sum + ((doc as ExtractedDocument).lineItems?.length || 0),
+      0
+    );
+    setStatus(
+      `Extracted ${payload.documents.length} document(s) with ${totalItems} line item(s).`,
+      "success"
+    );
 
     if (accessToken) {
       if (payload.history?.error) {
@@ -121,7 +111,7 @@ export default function AppPage() {
     const formData = new FormData();
     formData.append("text", pastedText);
 
-    setStatus("Parsing text...", "info");
+    setStatus("Analyzing text with AI...", "info");
 
     const response = await fetch("/api/parse", {
       method: "POST",
@@ -141,9 +131,14 @@ export default function AppPage() {
       return;
     }
 
-    setDataRows(payload.documents.map(normalizeRow));
+    setDocuments(payload.documents as ExtractedDocument[]);
     setIsResultsOpen(true);
-    setStatus("Parsed text.", "success");
+
+    const totalItems = payload.documents.reduce(
+      (sum, doc) => sum + ((doc as ExtractedDocument).lineItems?.length || 0),
+      0
+    );
+    setStatus(`Parsed text: ${totalItems} line item(s) found.`, "success");
 
     if (accessToken) {
       if (payload.history?.error) {
@@ -153,34 +148,72 @@ export default function AppPage() {
     }
   };
 
-  const handleRowChange = (index: number, field: keyof DocumentRow, value: string) => {
-    setDataRows((prev) => {
+  const handleMetadataChange = (
+    docIndex: number,
+    field: keyof DocumentMetadata,
+    value: string
+  ) => {
+    setDocuments((prev) => {
       const next = [...prev];
-      next[index] = { ...next[index], [field]: value };
+      next[docIndex] = {
+        ...next[docIndex],
+        metadata: { ...next[docIndex].metadata, [field]: value },
+      };
       return next;
     });
   };
 
-  const handleAddRow = () => setDataRows((prev) => [...prev, { ...EMPTY_ROW }]);
+  const handleLineItemChange = (
+    docIndex: number,
+    itemIndex: number,
+    field: keyof LineItem,
+    value: string
+  ) => {
+    setDocuments((prev) => {
+      const next = [...prev];
+      const lineItems = [...next[docIndex].lineItems];
+      lineItems[itemIndex] = { ...lineItems[itemIndex], [field]: value };
+      next[docIndex] = { ...next[docIndex], lineItems };
+      return next;
+    });
+  };
 
-  const handleRemoveRow = (index: number) => {
-    setDataRows((prev) => prev.filter((_, i) => i !== index));
+  const handleAddLineItem = (docIndex: number) => {
+    setDocuments((prev) => {
+      const next = [...prev];
+      next[docIndex] = {
+        ...next[docIndex],
+        lineItems: [...next[docIndex].lineItems, { ...EMPTY_LINE_ITEM }],
+      };
+      return next;
+    });
+  };
+
+  const handleRemoveLineItem = (docIndex: number, itemIndex: number) => {
+    setDocuments((prev) => {
+      const next = [...prev];
+      next[docIndex] = {
+        ...next[docIndex],
+        lineItems: next[docIndex].lineItems.filter((_, i) => i !== itemIndex),
+      };
+      return next;
+    });
   };
 
   const handleExportCsv = () => {
-    if (!dataRows.length) {
+    if (!documents.length) {
       setStatus("No data to export.", "warning");
       return;
     }
-    exportToCsv(dataRows);
+    exportToCsv(documents);
   };
 
   const handleExportXlsx = () => {
-    if (!dataRows.length) {
+    if (!documents.length) {
       setStatus("No data to export.", "warning");
       return;
     }
-    exportToXlsx(dataRows);
+    exportToXlsx(documents);
   };
 
   return (
@@ -265,10 +298,11 @@ export default function AppPage() {
       <ResultsModal
         isOpen={isResultsOpen}
         onClose={() => setIsResultsOpen(false)}
-        rows={dataRows}
-        onRowChange={handleRowChange}
-        onAddRow={handleAddRow}
-        onRemoveRow={handleRemoveRow}
+        documents={documents}
+        onMetadataChange={handleMetadataChange}
+        onLineItemChange={handleLineItemChange}
+        onAddLineItem={handleAddLineItem}
+        onRemoveLineItem={handleRemoveLineItem}
         onExportCsv={handleExportCsv}
         onExportXlsx={handleExportXlsx}
         isXlsxReady={isXlsxReady}

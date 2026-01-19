@@ -1,4 +1,46 @@
 // Document types
+export type DocumentType = "invoice" | "purchase_order" | "quote" | "receipt" | "other";
+
+export type LineItem = {
+  lineNumber: string;
+  quantity: string;
+  unit: string;
+  description: string;
+  unitPrice: string;
+  amount: string;
+  notes: string;
+};
+
+export type DocumentMetadata = {
+  documentType: DocumentType;
+  filename: string;
+  vendor: string;
+  invoiceNumber: string;
+  poNumber: string;
+  date: string;
+  dueDate: string;
+  subtotal: string;
+  tax: string;
+  shipping: string;
+  discount: string;
+  surcharge: string;
+  total: string;
+  currency: string;
+  billTo: string;
+  shipTo: string;
+  paymentTerms: string;
+  notes: string;
+};
+
+export type ExtractedDocument = {
+  id: string;
+  metadata: DocumentMetadata;
+  lineItems: LineItem[];
+  rawTextPreview: string;
+  error?: string;
+};
+
+// Legacy flat row for simple exports (one row per document)
 export type DocumentRow = {
   filename: string;
   vendor: string;
@@ -10,11 +52,6 @@ export type DocumentRow = {
   currency: string;
   billTo: string;
   notes: string;
-};
-
-export type ExtractedDocument = Partial<DocumentRow> & {
-  error?: string;
-  rawTextPreview?: string;
 };
 
 // History types

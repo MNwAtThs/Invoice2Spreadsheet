@@ -2,26 +2,37 @@ import crypto from "node:crypto";
 import OpenAI from "openai";
 import pdfParse from "pdf-parse";
 import { supabaseServer } from "../../../lib/supabaseServer";
+import type { ExtractedDocument, DocumentMetadata, LineItem, DocumentType } from "@/types";
 
 export const runtime = "nodejs";
 
-type ExtractedDocument = {
-  id: string;
-  filename: string;
+type OpenAiResult = {
+  documentType: string;
   vendor: string;
   invoiceNumber: string;
   poNumber: string;
   date: string;
   dueDate: string;
+  subtotal: string;
+  tax: string;
+  shipping: string;
+  discount: string;
+  surcharge: string;
   total: string;
   currency: string;
   billTo: string;
-  rawTextPreview: string;
-  error?: string;
-};
-
-type OpenAiResult = Partial<Omit<ExtractedDocument, "id" | "filename">> & {
-  rawTextSummary?: string;
+  shipTo: string;
+  paymentTerms: string;
+  notes: string;
+  lineItems: Array<{
+    lineNumber: string;
+    quantity: string;
+    unit: string;
+    description: string;
+    unitPrice: string;
+    amount: string;
+    notes: string;
+  }>;
 };
 
 const openai = new OpenAI({
@@ -32,20 +43,53 @@ function normalize(text: string) {
   return text.replace(/\r\n/g, "\n").replace(/[ \t]+/g, " ").trim();
 }
 
-function toDocument(result: OpenAiResult, filename: string): ExtractedDocument {
-  return {
-    id: crypto.randomUUID(),
+function normalizeDocumentType(type: string): DocumentType {
+  const lower = type.toLowerCase();
+  if (lower.includes("invoice")) return "invoice";
+  if (lower.includes("purchase") || lower.includes("po")) return "purchase_order";
+  if (lower.includes("quote") || lower.includes("estimate")) return "quote";
+  if (lower.includes("receipt")) return "receipt";
+  return "other";
+}
+
+function toDocument(result: Partial<OpenAiResult>, filename: string, error?: string): ExtractedDocument {
+  const metadata: DocumentMetadata = {
+    documentType: normalizeDocumentType(result.documentType ?? "other"),
     filename,
     vendor: result.vendor ?? "",
     invoiceNumber: result.invoiceNumber ?? "",
     poNumber: result.poNumber ?? "",
     date: result.date ?? "",
     dueDate: result.dueDate ?? "",
+    subtotal: result.subtotal ?? "",
+    tax: result.tax ?? "",
+    shipping: result.shipping ?? "",
+    discount: result.discount ?? "",
+    surcharge: result.surcharge ?? "",
     total: result.total ?? "",
     currency: result.currency ?? "",
     billTo: result.billTo ?? "",
-    rawTextPreview: result.rawTextSummary ?? "",
-    error: result.error
+    shipTo: result.shipTo ?? "",
+    paymentTerms: result.paymentTerms ?? "",
+    notes: result.notes ?? ""
+  };
+
+  const lineItems: LineItem[] = (result.lineItems ?? []).map((item) => ({
+    lineNumber: item.lineNumber ?? "",
+    quantity: item.quantity ?? "",
+    unit: item.unit ?? "",
+    description: item.description ?? "",
+    unitPrice: item.unitPrice ?? "",
+    amount: item.amount ?? "",
+    notes: item.notes ?? ""
+  }));
+
+  return {
+    id: crypto.randomUUID(),
+    metadata,
+    lineItems,
+    rawTextPreview: "",
+    error
   };
 }
 
@@ -55,41 +99,159 @@ async function parseWithOpenAI(text: string, filename: string): Promise<Extracte
     input: [
       {
         role: "system",
-        content:
-          "You extract invoice fields from raw text. Return only JSON that matches the schema."
+        content: `You are an expert document parser. Analyze the provided text and extract ALL relevant information.
+
+IMPORTANT INSTRUCTIONS:
+1. First, determine what type of document this is (invoice, purchase_order, quote, receipt, or other)
+2. Extract ALL line items - every single product, service, or charge listed
+3. Be thorough - complex documents may have 20+ line items
+4. For each line item, extract: line number, quantity, unit of measure, description, unit price, and total amount
+5. Capture all financial details: subtotal, tax, shipping, discounts, surcharges, and final total
+6. Extract both "bill to" and "ship to" addresses if present
+7. Extract payment terms if mentioned
+8. Use empty string "" for any field that's not present or unclear
+
+Return ONLY valid JSON matching the schema. Be comprehensive and extract everything.`
       },
       {
         role: "user",
-        content: `Filename: ${filename}\n\nInvoice text:\n${text.slice(0, 12000)}`
+        content: `Filename: ${filename}\n\nDocument text:\n${text.slice(0, 15000)}`
       }
     ],
     text: {
       format: {
         type: "json_schema",
-        name: "invoice_extraction",
+        name: "document_extraction",
         schema: {
           type: "object",
           properties: {
-            vendor: { type: "string" },
-            invoiceNumber: { type: "string" },
-            poNumber: { type: "string" },
-            date: { type: "string" },
-            dueDate: { type: "string" },
-            total: { type: "string" },
-            currency: { type: "string" },
-            billTo: { type: "string" },
-            rawTextSummary: { type: "string" }
+            documentType: {
+              type: "string",
+              description: "Type of document: invoice, purchase_order, quote, receipt, or other"
+            },
+            vendor: {
+              type: "string",
+              description: "Company/vendor name issuing the document"
+            },
+            invoiceNumber: {
+              type: "string",
+              description: "Invoice number or document reference number"
+            },
+            poNumber: {
+              type: "string",
+              description: "Purchase order number"
+            },
+            date: {
+              type: "string",
+              description: "Document date or invoice date"
+            },
+            dueDate: {
+              type: "string",
+              description: "Payment due date or delivery date"
+            },
+            subtotal: {
+              type: "string",
+              description: "Subtotal before tax/shipping/fees"
+            },
+            tax: {
+              type: "string",
+              description: "Tax amount"
+            },
+            shipping: {
+              type: "string",
+              description: "Shipping/freight charges"
+            },
+            discount: {
+              type: "string",
+              description: "Any discounts applied"
+            },
+            surcharge: {
+              type: "string",
+              description: "Any surcharges or additional fees"
+            },
+            total: {
+              type: "string",
+              description: "Final total amount"
+            },
+            currency: {
+              type: "string",
+              description: "Currency code (USD, EUR, etc.)"
+            },
+            billTo: {
+              type: "string",
+              description: "Billing address/recipient"
+            },
+            shipTo: {
+              type: "string",
+              description: "Shipping address if different from billing"
+            },
+            paymentTerms: {
+              type: "string",
+              description: "Payment terms (Net 30, Net 60, etc.)"
+            },
+            notes: {
+              type: "string",
+              description: "Any additional notes or special instructions"
+            },
+            lineItems: {
+              type: "array",
+              description: "All line items/products/services in the document",
+              items: {
+                type: "object",
+                properties: {
+                  lineNumber: {
+                    type: "string",
+                    description: "Line number or item number"
+                  },
+                  quantity: {
+                    type: "string",
+                    description: "Quantity ordered/sold"
+                  },
+                  unit: {
+                    type: "string",
+                    description: "Unit of measure (ea, SF, box, etc.)"
+                  },
+                  description: {
+                    type: "string",
+                    description: "Full item description including any mark numbers or specifications"
+                  },
+                  unitPrice: {
+                    type: "string",
+                    description: "Price per unit"
+                  },
+                  amount: {
+                    type: "string",
+                    description: "Line total (quantity × unit price)"
+                  },
+                  notes: {
+                    type: "string",
+                    description: "Any notes specific to this line item"
+                  }
+                },
+                required: ["lineNumber", "quantity", "unit", "description", "unitPrice", "amount", "notes"],
+                additionalProperties: false
+              }
+            }
           },
           required: [
+            "documentType",
             "vendor",
             "invoiceNumber",
             "poNumber",
             "date",
             "dueDate",
+            "subtotal",
+            "tax",
+            "shipping",
+            "discount",
+            "surcharge",
             "total",
             "currency",
             "billTo",
-            "rawTextSummary"
+            "shipTo",
+            "paymentTerms",
+            "notes",
+            "lineItems"
           ],
           additionalProperties: false
         }
@@ -99,14 +261,14 @@ async function parseWithOpenAI(text: string, filename: string): Promise<Extracte
 
   const outputText = response.output_text;
   if (!outputText) {
-    return toDocument({ error: "No output from OpenAI." }, filename);
+    return toDocument({}, filename, "No output from OpenAI.");
   }
 
   try {
     const parsed = JSON.parse(outputText) as OpenAiResult;
     return toDocument(parsed, filename);
   } catch {
-    return toDocument({ error: "Failed to parse OpenAI response." }, filename);
+    return toDocument({}, filename, "Failed to parse OpenAI response.");
   }
 }
 
@@ -130,7 +292,7 @@ async function saveHistory(userId: string, document: ExtractedDocument, source: 
     .insert({
       user_id: userId,
       source,
-      filename: document.filename,
+      filename: document.metadata.filename,
       status: document.error ? "failed" : "parsed"
     })
     .select("id")
@@ -142,15 +304,24 @@ async function saveHistory(userId: string, document: ExtractedDocument, source: 
 
   const { error: resultError } = await supabaseServer.from("invoice_results").insert({
     scan_id: scan.id,
-    vendor: document.vendor,
-    invoice_number: document.invoiceNumber,
-    po_number: document.poNumber,
-    date: document.date,
-    due_date: document.dueDate,
-    total: document.total,
-    currency: document.currency,
-    bill_to: document.billTo,
-    raw_text_summary: document.rawTextPreview
+    document_type: document.metadata.documentType,
+    vendor: document.metadata.vendor,
+    invoice_number: document.metadata.invoiceNumber,
+    po_number: document.metadata.poNumber,
+    date: document.metadata.date,
+    due_date: document.metadata.dueDate,
+    subtotal: document.metadata.subtotal,
+    tax: document.metadata.tax,
+    shipping: document.metadata.shipping,
+    discount: document.metadata.discount,
+    surcharge: document.metadata.surcharge,
+    total: document.metadata.total,
+    currency: document.metadata.currency,
+    bill_to: document.metadata.billTo,
+    ship_to: document.metadata.shipTo,
+    payment_terms: document.metadata.paymentTerms,
+    notes: document.metadata.notes,
+    line_items: document.lineItems
   });
 
   if (resultError) {
@@ -165,7 +336,6 @@ export async function POST(request: Request) {
     return Response.json({ error: "Missing OPENAI_API_KEY." }, { status: 500 });
   }
   if (!supabaseServer) {
-    // Allow parsing even if history storage is not configured.
     console.warn("Supabase service role key missing. History will not be saved.");
   }
 
@@ -199,16 +369,12 @@ export async function POST(request: Request) {
 
   for (const entry of files) {
     if (!(entry instanceof File)) {
-      results.push(
-        toDocument({ error: "Unsupported file type" }, "unknown")
-      );
+      results.push(toDocument({}, "unknown", "Unsupported file type"));
       continue;
     }
 
     if (!entry.type.includes("pdf")) {
-      results.push(
-        toDocument({ error: "Unsupported file type" }, entry.name)
-      );
+      results.push(toDocument({}, entry.name, "Unsupported file type"));
       continue;
     }
 
