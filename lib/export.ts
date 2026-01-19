@@ -115,14 +115,16 @@ export function exportToCsv(documents: ExtractedDocument[]): void {
 export function exportToXlsx(documents: ExtractedDocument[]): boolean {
   if (!documents.length || !window.XLSX) return false;
 
+  const XLSX = window.XLSX; // Store reference after the check
+
   // Export each document as a separate Excel file
   documents.forEach((doc) => {
-    const workbook = window.XLSX.utils.book_new();
+    const workbook = XLSX.utils.book_new();
     const sheetData = buildSheetData(doc);
-    const worksheet = window.XLSX.utils.aoa_to_sheet(sheetData);
+    const worksheet = XLSX.utils.aoa_to_sheet(sheetData);
 
     // Set column widths for better presentation
-    worksheet["!cols"] = [
+    (worksheet as Record<string, unknown>)["!cols"] = [
       { wch: 15 },  // Column A (labels/line #)
       { wch: 10 },  // Column B (qty/values)
       { wch: 10 },  // Column C (unit)
@@ -133,10 +135,10 @@ export function exportToXlsx(documents: ExtractedDocument[]): boolean {
     ];
 
     const sheetName = formatDocumentType(doc.metadata.documentType);
-    window.XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
 
     const filename = `${sanitizeFilename(doc.metadata.filename || "document")}.xlsx`;
-    window.XLSX.writeFile(workbook, filename);
+    XLSX.writeFile(workbook, filename);
   });
 
   return true;
